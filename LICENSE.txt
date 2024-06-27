@@ -1,0 +1,10 @@
+﻿Restrict You License
+
+Copyright (c) 2024 Usman Mehmood. All rights reserved.
+
+Permission is hereby granted to view the code of this
+library for educational purposes only.
+
+No permission is granted to download, use, modify,
+distribute, or create derivative works from this code
+or any part thereof for any other purposes.
