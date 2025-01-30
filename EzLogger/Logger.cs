@@ -177,6 +177,8 @@ namespace EzLogger
         private Task LoggingTask { get; }
         private Task CleanupTask { get; }
         private SemaphoreSlim LogFileSemaphore { get; } = new SemaphoreSlim(1, 1);
+        private bool IsLoggingServiceRunning { get; set; } = false;
+        private bool IsCleaningServiceRunning { get; set; } = false;
 
         private Logger(Verbosity consoleVerbosity = Verbosity.Debug, Verbosity fileVerbosity = Verbosity.Warning)
         {
@@ -325,6 +327,7 @@ namespace EzLogger
         /// <returns></returns>
         private async Task LoggerService(CancellationToken token)
         {
+            IsLoggingServiceRunning = true;
             try
             {
                 List<Log> logList = new();
@@ -366,10 +369,10 @@ namespace EzLogger
                     InternalLog(remainingLogs);
                 }
 
-                InternalLogConsole(new List<Log> { new(Verbosity.Info, $"{ApplicationName}: Logging task closed") });
+                // InternalLogConsole(new List<Log> { new(Verbosity.Info, $"{ApplicationName}: Logging task closed") });
             }
 
-            await Task.Delay(1000, token);
+            IsLoggingServiceRunning = false;
         }
 
         /// <summary>
@@ -385,6 +388,7 @@ namespace EzLogger
         /// </remarks>
         private async Task LoggerCleanerService(CancellationToken token)
         {
+            IsCleaningServiceRunning = true;
             while (!token.IsCancellationRequested)
             {
                 try
@@ -402,7 +406,8 @@ namespace EzLogger
                 }
             }
 
-            InternalLogConsole(new List<Log> { new(Verbosity.Info, $"{ApplicationName}: Logger cleanup task closed") });
+            // InternalLogConsole(new List<Log> { new(Verbosity.Info, $"{ApplicationName}: Logger cleanup task closed") });
+            IsCleaningServiceRunning = false;
         }
 
         /// <summary>
@@ -456,7 +461,7 @@ namespace EzLogger
         private static string ComposeLogString(DateTime timeStamp, Verbosity verbosity, string message)
         {
             var logString = new StringBuilder(128);
-            logString.AppendFormat("[{0}: {1:D2}:{2:D2}:{3:D2}:{4:D3}] ", timeStamp.DayOfWeek, timeStamp.Hour, timeStamp.Minute, timeStamp.Second, timeStamp.Millisecond);
+            logString.AppendFormat("[{0:D2}:{1:D2}:{2:D2}:{4:D3}] ", timeStamp.Hour, timeStamp.Minute, timeStamp.Second, timeStamp.Millisecond);
             logString.Append(verbosity.ToString().PadRight(8));
             logString.Append(" -> ");
             logString.Append(message);
@@ -583,7 +588,10 @@ namespace EzLogger
                 });
             }
 
-            InternalLogConsole(new List<Log> { new(Verbosity.Info, $"{ApplicationName}: Logging Tasks Graceful Exit") });
+            if (IsLoggingServiceRunning is false && IsCleaningServiceRunning is false)
+                InternalLogConsole(new List<Log> { new(Verbosity.Info, $"{ApplicationName}: Logging tasks graceful exit") });
+            else
+                InternalLogConsole(new List<Log> { new(Verbosity.Critical, $"{ApplicationName}: Logging tasks not closed!") });
         }
     }
 }

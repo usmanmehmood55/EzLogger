@@ -1,7 +1,7 @@
 ﻿# EzLogger Library
 
 EzLogger is an easy to use logging framework for .NET applications designed to
-facilitate efficient debugging and application monitoring with minimal overhead.
+facilitate easy logging and application monitoring with minimal overhead.
 
 ## Key Features
 
@@ -71,7 +71,7 @@ Logger.StopLoggingTasks();
 
 ### Example
 
-![Picture](https://i.imgur.com/u0Zz64R.png)
+![Picture](https://i.imgur.com/fvmVpaD.png)
 
 ### Installation
 
@@ -97,4 +97,4 @@ advanced loggers, it provides an easy to use interface and is reasonably perform
 
 ### Inner Working
 
-![Flowchart](https://i.imgur.com/mwU0mqE.png)
+![Flowchart](https://i.imgur.com/nwC9Iu3.png)
