@@ -461,7 +461,7 @@ namespace EzLogger
         private static string ComposeLogString(DateTime timeStamp, Verbosity verbosity, string message)
         {
             var logString = new StringBuilder(128);
-            logString.AppendFormat("[{0:D2}:{1:D2}:{2:D2}:{4:D3}] ", timeStamp.Hour, timeStamp.Minute, timeStamp.Second, timeStamp.Millisecond);
+            logString.AppendFormat("[{0:D2}:{1:D2}:{2:D2}:{3:D3}] ", timeStamp.Hour, timeStamp.Minute, timeStamp.Second, timeStamp.Millisecond);
             logString.Append(verbosity.ToString().PadRight(8));
             logString.Append(" -> ");
             logString.Append(message);
