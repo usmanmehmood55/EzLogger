@@ -8,6 +8,7 @@ namespace EzLogger
         Critical,
         Error,
         Warning,
+        Announce,
         Info,
         Debug,
     }
@@ -95,6 +96,16 @@ namespace EzLogger
         /// 
         /// <param name="message">Critical error message</param>
         public static void Critical(string message = "") => Instance.LogPush(Verbosity.Critical, message);
+
+        /// <summary>
+        /// Prints an announcement message to the terminal if <see cref="ConsoleVerbosity"/> is set
+        /// to <see cref="Verbosity.Announce"/> or higher. The same message is also written to a
+        /// log file if the <see cref="FileVerbosity"/> is set to <see cref="Verbosity.Announce"/>
+        /// or higher.
+        /// </summary>
+        /// 
+        /// <param name="message">Announcement message</param>
+        public static void Announce(string message = "") => Instance.LogPush(Verbosity.Announce, message);
 
         /// <summary>
         /// Sets the <see cref="ConsoleVerbosity"/> level of the singleton instance.
@@ -222,6 +233,7 @@ namespace EzLogger
                     Verbosity.Warning  => ConsoleColor.Yellow,
                     Verbosity.Error    => ConsoleColor.Red,
                     Verbosity.Critical => ConsoleColor.White,
+                    Verbosity.Announce => ConsoleColor.Black,
 
                     _ => DefaultForeground,
                 };
@@ -229,6 +241,7 @@ namespace EzLogger
                 Console.BackgroundColor = log.Verbosity switch
                 {
                     Verbosity.Critical => ConsoleColor.DarkRed,
+                    Verbosity.Announce => ConsoleColor.DarkGreen,
 
                     _ => DefaultBackground,
                 };

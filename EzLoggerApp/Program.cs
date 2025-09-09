@@ -8,6 +8,7 @@ namespace EzLoggerApp
         {
             Logger.SetConfig(Verbosity.Debug, Verbosity.Warning, 2);
 
+            Logger.Announce("The algorithm has started.");
             Logger.Debug("Some event has happened.");
             Logger.Info("Application initialized successfully.");
             Logger.Warning("Low disk space warning.");

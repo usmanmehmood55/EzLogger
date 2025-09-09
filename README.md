@@ -7,7 +7,7 @@ facilitate easy logging and application monitoring with minimal overhead.
 
 ### Comprehensive Logging Levels
 
-Five distinct logging levels (`Critical`, `Error`, `Warning`, `Info`, `Debug`)
+Six distinct logging levels (`Critical`, `Error`, `Warning`, `Announce`, `Info`, `Debug`)
 allow for detailed separation and control over log output, ensuring you receive
 just the right amount of information.
 
@@ -55,6 +55,7 @@ using EzLogger;
 Logger.SetConfig(Verbosity.Debug, Verbosity.Warning);
 
 // Logging examples
+Logger.Announce("The algorithm has started.");
 Logger.Debug("Some event has happened.");
 Logger.Info("Application initialized successfully.");
 Logger.Warning("Low disk space warning.");
@@ -71,7 +72,7 @@ Logger.StopLoggingTasks();
 
 ### Example
 
-![Picture](https://i.imgur.com/fvmVpaD.png)
+![Picture](https://i.imgur.com/G99qR6T.png)
 
 ### Installation
 
