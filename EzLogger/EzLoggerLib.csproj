@@ -5,17 +5,48 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    
+    <!-- Basic Package Information -->
+    <VersionPrefix>1.0.0.10</VersionPrefix>
+    
     <Title>EzLogger</Title>
     <Authors>Usman Mehmood</Authors>
-    <Description>Easy to use logger</Description>
+    <Description>Easy to use logger for .NET applications with asynchronous logging, dual console/file output, and automatic log management.</Description>
     <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
     <PackageRequireLicenseAcceptance>True</PackageRequireLicenseAcceptance>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <Copyright>Usman Mehmood</Copyright>
-	<VersionPrefix>1.0.0.9</VersionPrefix>
     <AssemblyVersion>$(VersionPrefix)</AssemblyVersion>
     <FileVersion>$(AssemblyVersion)</FileVersion>
+    
+    <!-- Repository Information -->
+    <RepositoryUrl>https://github.com/usmanmehmood55/EzLogger</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/usmanmehmood55/EzLogger</PackageProjectUrl>
+    
+    <!-- Documentation and Support -->
+    <PackageReadmeUrl>https://github.com/usmanmehmood55/EzLogger/blob/main/README.md</PackageReadmeUrl>
+    
+    <PackageIcon>icon.png</PackageIcon>
+    
+    <!-- Package Classification -->
+    <PackageTags>logging;logger;console;file;async;singleton;dotnet;net8</PackageTags>
+    <PackageCategory>Logging</PackageCategory>
+    <PackageType>Library</PackageType>
+    
+    <!-- Additional Metadata -->
+    <NeutralLanguage>en</NeutralLanguage>
+    <PackageLanguage>en</PackageLanguage>
+    
+    <!-- Development Information -->
+    <DevelopmentDependency>false</DevelopmentDependency>
+    <RequireLicenseAcceptance>true</RequireLicenseAcceptance>
   </PropertyGroup>
+
+  <ItemGroup>
+   <!-- Pack the icon inside the NuGet package -->
+   <None Include="icon.png" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <None Include="..\LICENSE.txt">
