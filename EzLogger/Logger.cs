@@ -53,7 +53,7 @@ namespace EzLogger
         /// to <see cref="Verbosity.Debug"/>. The same message is also written to a log file
         /// if the <see cref="FileVerbosity"/> is set to <see cref="Verbosity.Debug"/>.
         /// </summary>
-        /// 
+        ///
         /// <param name="message">Debug message</param>
         public static void Debug(string message = "") => Instance.LogPush(Verbosity.Debug, message);
 
@@ -63,7 +63,7 @@ namespace EzLogger
         /// log file if the <see cref="FileVerbosity"/> is set to <see cref="Verbosity.Info"/>
         /// or higher.
         /// </summary>
-        /// 
+        ///
         /// <param name="message">Info message</param>
         public static void Info(string message = "") => Instance.LogPush(Verbosity.Info, message);
 
@@ -73,7 +73,7 @@ namespace EzLogger
         /// log file if the <see cref="FileVerbosity"/> is set to <see cref="Verbosity. Warning"/>
         /// or higher.
         /// </summary>
-        /// 
+        ///
         /// <param name="message">Warning message</param>
         public static void Warning(string message = "") => Instance.LogPush(Verbosity.Warning, message);
 
@@ -83,7 +83,7 @@ namespace EzLogger
         /// log file if the <see cref="FileVerbosity"/> is set to <see cref="Verbosity. Error"/>
         /// or higher.
         /// </summary>
-        /// 
+        ///
         /// <param name="message">Error message</param>
         public static void Error(string message = "") => Instance.LogPush(Verbosity.Error, message);
 
@@ -93,7 +93,7 @@ namespace EzLogger
         /// log file if the <see cref="FileVerbosity"/> is set to <see cref="Verbosity.Critical"/>
         /// or higher.
         /// </summary>
-        /// 
+        ///
         /// <param name="message">Critical error message</param>
         public static void Critical(string message = "") => Instance.LogPush(Verbosity.Critical, message);
 
@@ -103,7 +103,7 @@ namespace EzLogger
         /// log file if the <see cref="FileVerbosity"/> is set to <see cref="Verbosity.Announce"/>
         /// or higher.
         /// </summary>
-        /// 
+        ///
         /// <param name="message">Announcement message</param>
         public static void Announce(string message = "") => Instance.LogPush(Verbosity.Announce, message);
 
@@ -204,7 +204,7 @@ namespace EzLogger
         /// <summary>
         /// Pushes the a to the <see cref="LogQueue"/> with the current time.
         /// </summary>
-        /// 
+        ///
         /// <param name="verbosity">Verbosity level of the message</param>
         /// <param name="message">Log message</param>
         private void LogPush(Verbosity verbosity, string message)
@@ -264,24 +264,38 @@ namespace EzLogger
 
             try
             {
-                List<Log> filteredLogs = logBatch.Where(log => log.Verbosity <= FileVerbosity).ToList();
-                if (filteredLogs.Count > 0)
-                {
-                    string filePath = GetLogsPath();
-                    string fileDir = GetLogsDir();
-                    if (!File.Exists(filePath))
-                    {
-                        Directory.CreateDirectory(fileDir);
-                        FileStream createStream = File.Create(filePath);
-                        createStream.Close();
-                    }
+                StreamWriter? streamWriter = null;
 
-                    using FileStream fileStream = new(filePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
-                    using StreamWriter streamWriter = new(fileStream);
-                    foreach (Log log in filteredLogs)
+                try
+                {
+                    foreach (Log log in logBatch)
                     {
-                        string formattedLogString = ComposeLogString(log.TimeStamp, log.Verbosity, log.Message);
-                        await streamWriter.WriteLineAsync(formattedLogString);
+                        if (log.Verbosity <= FileVerbosity)
+                        {
+                            if (streamWriter == null)
+                            {
+                                string filePath = GetLogsPath();
+                                string fileDir = GetLogsDir();
+                                if (!Directory.Exists(fileDir))
+                                {
+                                    Directory.CreateDirectory(fileDir);
+                                }
+
+                                // Open file once per batch
+                                FileStream fileStream = new(filePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+                                streamWriter = new StreamWriter(fileStream);
+                            }
+
+                            string formattedLogString = ComposeLogString(log.TimeStamp, log.Verbosity, log.Message);
+                            await streamWriter.WriteLineAsync(formattedLogString);
+                        }
+                    }
+                }
+                finally
+                {
+                    if (streamWriter != null)
+                    {
+                        await streamWriter.DisposeAsync();
                     }
                 }
             }
@@ -298,7 +312,21 @@ namespace EzLogger
         /// <returns></returns>
         private static List<Log> BreakDownMultiLine(List<Log> logList)
         {
-            List<Log> breakdownList = new(logList.Count * 3);
+            // Check if any log needs breakdown to avoid allocation if possible
+            bool needsBreakdown = false;
+            foreach (var log in logList)
+            {
+                if (log.Message.Contains('\n'))
+                {
+                    needsBreakdown = true;
+                    break;
+                }
+            }
+
+            if (!needsBreakdown)
+                return logList;
+
+            List<Log> breakdownList = new(logList.Count * 2);
 
             foreach (Log multiLineLog in logList)
             {
@@ -327,9 +355,12 @@ namespace EzLogger
         private void InternalLog(List<Log> logBatch)
         {
             List<Log> brokenDownLogs = BreakDownMultiLine(logBatch);
-            Task a = Task.Run(() => InternalLogConsole(brokenDownLogs));
-            Task b = Task.Run(() => InternalLogFile(brokenDownLogs));
-            Task.WaitAll(a, b);
+
+            // Run Console logging synchronously on the background thread to avoid task overhead
+            InternalLogConsole(brokenDownLogs);
+
+            // Run File logging and wait for it
+            InternalLogFile(brokenDownLogs).GetAwaiter().GetResult();
         }
 
         /// <summary>
@@ -466,27 +497,35 @@ namespace EzLogger
         /// Composes the actual log string to be printed or written to a file. Appends the
         /// timestamp as well as verbosity to the message string.
         /// </summary>
-        /// 
+        ///
         /// <param name="verbosity">verbosity level</param>
         /// <param name="message">log message</param>
-        /// 
+        ///
         /// <returns>timestamped string</returns>
         private static string ComposeLogString(DateTime timeStamp, Verbosity verbosity, string message)
         {
-            var logString = new StringBuilder(128);
-            logString.AppendFormat("[{0:D2}:{1:D2}:{2:D2}:{3:D3}] ", timeStamp.Hour, timeStamp.Minute, timeStamp.Second, timeStamp.Millisecond);
-            logString.Append(verbosity.ToString().PadRight(8));
-            logString.Append(" -> ");
-            logString.Append(message);
-            return logString.ToString();
+            // Using a single Interpolated String for efficiency in .NET 6+
+            // .NET 8+ optimizes this further with Handler-based interpolation
+            return $"[{timeStamp.Hour:D2}:{timeStamp.Minute:D2}:{timeStamp.Second:D2}:{timeStamp.Millisecond:D3}] {GetVerbosityString(verbosity)} -> {message}";
         }
+
+        private static string GetVerbosityString(Verbosity verbosity) => verbosity switch
+        {
+            Verbosity.Critical => "Critical",
+            Verbosity.Error    => "Error   ",
+            Verbosity.Warning  => "Warning ",
+            Verbosity.Announce => "Announce",
+            Verbosity.Info     => "Info    ",
+            Verbosity.Debug    => "Debug   ",
+            _                  => "Unknown "
+        };
 
         /// <summary>
         /// Returns path to the current logs file. The logs folder is supposed to be on the same
         /// location as the app itself, and named Application Name + "Logs". Inside which would be
-        /// a text file with the year and week of year as its name. 
+        /// a text file with the year and week of year as its name.
         /// </summary>
-        /// 
+        ///
         /// <returns>Path to logs file</returns>
         private string GetLogsPath()
         {
