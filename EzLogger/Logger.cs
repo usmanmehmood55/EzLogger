@@ -172,6 +172,18 @@ namespace EzLogger
             }
         }
 
+        private static readonly string[] VerbosityStrings = new string[]
+        {
+            "CRITICAL",
+            "ERROR   ",
+            "WARNING ",
+            "ANNOUNCE",
+            "INFO    ",
+            "DEBUG   "
+        };
+
+        private static readonly ThreadLocal<StringBuilder> _sbCache = new(() => new StringBuilder(256));
+
         private long MaxLogFolderSizeBytes { get; set; } = 1 * (1024 * 1024 * 1024); // 1 GB
         private long MaxLogFolderSizeKb { get => MaxLogFolderSizeBytes / 1024; set => MaxLogFolderSizeBytes = value * 1024; }
         private long MaxLogFolderSizeMb { get => MaxLogFolderSizeKb / 1024; set => MaxLogFolderSizeKb = value * 1024; }
@@ -179,16 +191,19 @@ namespace EzLogger
 
         private CancellationTokenSource LoggingTaskCancellationTokenSource { get; } = new();
         private CancellationTokenSource CleanupTaskCancellationTokenSource { get; } = new();
-        private BlockingCollection<Log> LogQueue { get; } = new();
+        private BlockingCollection<Log> ConsoleQueue { get; } = new();
+        private BlockingCollection<Log> FileQueue { get; } = new();
         private Verbosity ConsoleVerbosity { get; set; }
         private Verbosity FileVerbosity { get; set; }
         private string ApplicationName { get; set; }
         private static ConsoleColor DefaultForeground => Console.ForegroundColor;
         private static ConsoleColor DefaultBackground => Console.BackgroundColor;
-        private Task LoggingTask { get; }
+        private Task ConsoleLoggingTask { get; }
+        private Task FileLoggingTask { get; }
         private Task CleanupTask { get; }
         private SemaphoreSlim LogFileSemaphore { get; } = new SemaphoreSlim(1, 1);
-        private bool IsLoggingServiceRunning { get; set; } = false;
+        private bool IsConsoleLoggingServiceRunning { get; set; } = false;
+        private bool IsFileLoggingServiceRunning { get; set; } = false;
         private bool IsCleaningServiceRunning { get; set; } = false;
 
         private Logger(Verbosity consoleVerbosity = Verbosity.Debug, Verbosity fileVerbosity = Verbosity.Warning)
@@ -197,23 +212,45 @@ namespace EzLogger
             FileVerbosity    = fileVerbosity;
 
             ApplicationName = AppDomain.CurrentDomain.FriendlyName;
-            LoggingTask = Task.Run(() => Instance.LoggerService(LoggingTaskCancellationTokenSource.Token));
+            ConsoleLoggingTask = Task.Run(() => Instance.ConsoleLoggerService(LoggingTaskCancellationTokenSource.Token));
+            FileLoggingTask = Task.Run(() => Instance.FileLoggerService(LoggingTaskCancellationTokenSource.Token));
             CleanupTask = Task.Run(() => Instance.LoggerCleanerService(CleanupTaskCancellationTokenSource.Token));
         }
 
         /// <summary>
-        /// Pushes the a to the <see cref="LogQueue"/> with the current time.
+        /// Pushes the a to the relevant queues with the current time.
         /// </summary>
         /// 
         /// <param name="verbosity">Verbosity level of the message</param>
         /// <param name="message">Log message</param>
         private void LogPush(Verbosity verbosity, string message)
         {
-            if (verbosity > ConsoleVerbosity)
+            if (verbosity > ConsoleVerbosity && verbosity > FileVerbosity)
                 return;
 
-            Log log = new(verbosity, message);
-            LogQueue.Add(log);
+            DateTime now = DateTime.Now;
+
+            if (message.Contains('\n'))
+            {
+                string[] lines = message.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+                foreach (string line in lines)
+                {
+                    PushToQueues(new Log(now, verbosity, line));
+                }
+            }
+            else
+            {
+                PushToQueues(new Log(now, verbosity, message));
+            }
+        }
+
+        private void PushToQueues(Log log)
+        {
+            if (log.Verbosity <= ConsoleVerbosity)
+                ConsoleQueue.Add(log);
+
+            if (log.Verbosity <= FileVerbosity)
+                FileQueue.Add(log);
         }
 
         /// <summary>
@@ -224,6 +261,9 @@ namespace EzLogger
         {
             foreach (Log log in logBatch)
             {
+                if (log.Verbosity > Instance.ConsoleVerbosity)
+                    continue;
+
                 string formattedLogstring = ComposeLogString(log.TimeStamp, log.Verbosity, log.Message);
                 Console.ResetColor();
 
@@ -264,25 +304,20 @@ namespace EzLogger
 
             try
             {
-                List<Log> filteredLogs = logBatch.Where(log => log.Verbosity <= FileVerbosity).ToList();
-                if (filteredLogs.Count > 0)
+                string filePath = GetLogsPath();
+                string fileDir = GetLogsDir();
+                if (!File.Exists(filePath))
                 {
-                    string filePath = GetLogsPath();
-                    string fileDir = GetLogsDir();
-                    if (!File.Exists(filePath))
-                    {
-                        Directory.CreateDirectory(fileDir);
-                        FileStream createStream = File.Create(filePath);
-                        createStream.Close();
-                    }
+                    Directory.CreateDirectory(fileDir);
+                    using FileStream createStream = File.Create(filePath);
+                }
 
-                    using FileStream fileStream = new(filePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
-                    using StreamWriter streamWriter = new(fileStream);
-                    foreach (Log log in filteredLogs)
-                    {
-                        string formattedLogString = ComposeLogString(log.TimeStamp, log.Verbosity, log.Message);
-                        await streamWriter.WriteLineAsync(formattedLogString);
-                    }
+                using FileStream fileStream = new(filePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+                using StreamWriter streamWriter = new(fileStream);
+                foreach (Log log in logBatch)
+                {
+                    string formattedLogString = ComposeLogString(log.TimeStamp, log.Verbosity, log.Message);
+                    await streamWriter.WriteLineAsync(formattedLogString);
                 }
             }
             finally
@@ -291,73 +326,26 @@ namespace EzLogger
             }
         }
 
-        /// <summary>
-        /// Breaks down multi-line logs into multiple single-line logs
-        /// </summary>
-        /// <param name="logList"></param>
-        /// <returns></returns>
-        private static List<Log> BreakDownMultiLine(List<Log> logList)
+        private async Task ConsoleLoggerService(CancellationToken token)
         {
-            List<Log> breakdownList = new(logList.Count * 3);
-
-            foreach (Log multiLineLog in logList)
-            {
-                if (multiLineLog.Message.Contains('\n'))
-                {
-                    string[] lines = multiLineLog.Message.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-                    foreach (string singleLine in lines)
-                    {
-                        Log breakDown = new(multiLineLog.TimeStamp, multiLineLog.Verbosity, singleLine);
-                        breakdownList.Add(breakDown);
-                    }
-                }
-                else
-                {
-                    breakdownList.Add(multiLineLog);
-                }
-            }
-
-            return breakdownList;
-        }
-
-        /// <summary>
-        /// Writes a batch of logs on to the console and the log file.
-        /// </summary>
-        /// <param name="logBatch"></param>
-        private void InternalLog(List<Log> logBatch)
-        {
-            List<Log> brokenDownLogs = BreakDownMultiLine(logBatch);
-            Task a = Task.Run(() => InternalLogConsole(brokenDownLogs));
-            Task b = Task.Run(() => InternalLogFile(brokenDownLogs));
-            Task.WaitAll(a, b);
-        }
-
-        /// <summary>
-        /// Logger's main service/task that takes any available logs from the <see cref="LogQueue"/>
-        /// and write them on to the console and the log file.
-        /// </summary>
-        /// <param name="token">A cancellation token that can be used to cancel the logger task.</param>
-        /// <returns></returns>
-        private async Task LoggerService(CancellationToken token)
-        {
-            IsLoggingServiceRunning = true;
+            IsConsoleLoggingServiceRunning = true;
             try
             {
                 List<Log> logList = new();
-                while (!token.IsCancellationRequested || !LogQueue.IsCompleted)
+                while (!token.IsCancellationRequested || !ConsoleQueue.IsCompleted)
                 {
                     logList.Clear();
                     try
                     {
-                        if (LogQueue.TryTake(out Log firstInBatch, 500, token))
+                        if (ConsoleQueue.TryTake(out Log firstInBatch, 500, token))
                         {
                             logList.Add(firstInBatch);
-                            while (LogQueue.TryTake(out Log restInBatch, 0, token))
+                            while (ConsoleQueue.TryTake(out Log restInBatch, 0, token))
                             {
                                 logList.Add(restInBatch);
                             }
 
-                            InternalLog(logList);
+                            InternalLogConsole(logList);
                         }
                     }
                     catch (OperationCanceledException)
@@ -373,19 +361,63 @@ namespace EzLogger
             finally
             {
                 List<Log> remainingLogs = new();
-                while (LogQueue.TryTake(out Log log))
+                while (ConsoleQueue.TryTake(out Log log))
                 {
                     remainingLogs.Add(log);
                 }
-                if (remainingLogs.Any())
+                if (remainingLogs.Count > 0)
                 {
-                    InternalLog(remainingLogs);
+                    InternalLogConsole(remainingLogs);
                 }
-
-                // InternalLogConsole(new List<Log> { new(Verbosity.Info, $"{ApplicationName}: Logging task closed") });
             }
+            IsConsoleLoggingServiceRunning = false;
+        }
 
-            IsLoggingServiceRunning = false;
+        private async Task FileLoggerService(CancellationToken token)
+        {
+            IsFileLoggingServiceRunning = true;
+            try
+            {
+                List<Log> logList = new();
+                while (!token.IsCancellationRequested || !FileQueue.IsCompleted)
+                {
+                    logList.Clear();
+                    try
+                    {
+                        if (FileQueue.TryTake(out Log firstInBatch, 500, token))
+                        {
+                            logList.Add(firstInBatch);
+                            while (FileQueue.TryTake(out Log restInBatch, 0, token))
+                            {
+                                logList.Add(restInBatch);
+                            }
+
+                            await InternalLogFile(logList);
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.ToString());
+            }
+            finally
+            {
+                List<Log> remainingLogs = new();
+                while (FileQueue.TryTake(out Log log))
+                {
+                    remainingLogs.Add(log);
+                }
+                if (remainingLogs.Count > 0)
+                {
+                    await InternalLogFile(remainingLogs);
+                }
+            }
+            IsFileLoggingServiceRunning = false;
         }
 
         /// <summary>
@@ -415,11 +447,12 @@ namespace EzLogger
                 }
                 catch (Exception ex)
                 {
-                    Error($"Error in cleanup task: {ex.Message}");
+                    // Use direct console writes to prevent race conditions on shutdown
+                    var log = new List<Log> { new Log(DateTime.Now, Verbosity.Error, $"Error in cleanup task: {ex.Message}") };
+                    InternalLogConsole(log);
                 }
             }
 
-            // InternalLogConsole(new List<Log> { new(Verbosity.Info, $"{ApplicationName}: Logger cleanup task closed") });
             IsCleaningServiceRunning = false;
         }
 
@@ -452,7 +485,11 @@ namespace EzLogger
                 {
                     totalSize -= new FileInfo(orderedLogFiles[index]).Length;
                     File.Delete(orderedLogFiles[index]);
-                    Warning($"Logs cleanup task deleted file {orderedLogFiles[index]}");
+                    
+                    // Use direct console writes to prevent race conditions on shutdown
+                    var log = new List<Log> { new Log(DateTime.Now, Verbosity.Warning, $"Logs cleanup task deleted file {orderedLogFiles[index]}") };
+                    InternalLogConsole(log);
+
                     index++;
                 }
             }
@@ -473,12 +510,37 @@ namespace EzLogger
         /// <returns>timestamped string</returns>
         private static string ComposeLogString(DateTime timeStamp, Verbosity verbosity, string message)
         {
-            var logString = new StringBuilder(128);
-            logString.AppendFormat("[{0:D2}:{1:D2}:{2:D2}:{3:D3}] ", timeStamp.Hour, timeStamp.Minute, timeStamp.Second, timeStamp.Millisecond);
-            logString.Append(verbosity.ToString().PadRight(8));
-            logString.Append(" -> ");
-            logString.Append(message);
-            return logString.ToString();
+            StringBuilder sb = _sbCache.Value!;
+            sb.Clear();
+
+            sb.Append('[');
+            AppendTwoDigits(sb, timeStamp.Hour);
+            sb.Append(':');
+            AppendTwoDigits(sb, timeStamp.Minute);
+            sb.Append(':');
+            AppendTwoDigits(sb, timeStamp.Second);
+            sb.Append(':');
+            AppendThreeDigits(sb, timeStamp.Millisecond);
+            sb.Append("] ");
+
+            sb.Append(VerbosityStrings[(int)verbosity]);
+            sb.Append(" -> ");
+            sb.Append(message);
+
+            return sb.ToString();
+        }
+
+        private static void AppendTwoDigits(StringBuilder sb, int value)
+        {
+            if (value < 10) sb.Append('0');
+            sb.Append(value);
+        }
+
+        private static void AppendThreeDigits(StringBuilder sb, int value)
+        {
+            if (value < 100) sb.Append('0');
+            if (value < 10) sb.Append('0');
+            sb.Append(value);
         }
 
         /// <summary>
@@ -569,13 +631,14 @@ namespace EzLogger
         /// </remarks>
         private void LoggingTasksGracefulExit()
         {
-            LogQueue.CompleteAdding();
+            ConsoleQueue.CompleteAdding();
+            FileQueue.CompleteAdding();
 
             LoggingTaskCancellationTokenSource.Cancel();
 
             try
             {
-                LoggingTask.Wait();
+                Task.WaitAll(ConsoleLoggingTask, FileLoggingTask);
             }
             catch (AggregateException ae)
             {
@@ -601,7 +664,7 @@ namespace EzLogger
                 });
             }
 
-            if (IsLoggingServiceRunning is false && IsCleaningServiceRunning is false)
+            if (IsConsoleLoggingServiceRunning is false && IsFileLoggingServiceRunning is false && IsCleaningServiceRunning is false)
                 InternalLogConsole(new List<Log> { new(Verbosity.Info, $"{ApplicationName}: Logging tasks graceful exit") });
             else
                 InternalLogConsole(new List<Log> { new(Verbosity.Critical, $"{ApplicationName}: Logging tasks not closed!") });
