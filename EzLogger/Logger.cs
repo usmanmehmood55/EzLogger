@@ -157,20 +157,9 @@ namespace EzLogger
         }
         #endregion
 
-        private static Logger? _instance = null;
-        private static readonly object lockObject = new();
+        private static readonly Lazy<Logger> _lazyInstance = new(() => new Logger());
 
-        private static Logger Instance
-        {
-            get
-            {
-                lock (lockObject)
-                {
-                    _instance ??= new Logger();
-                    return _instance;
-                }
-            }
-        }
+        private static Logger Instance => _lazyInstance.Value;
 
         private static readonly string[] VerbosityStrings = new string[]
         {
@@ -196,8 +185,8 @@ namespace EzLogger
         private Verbosity ConsoleVerbosity { get; set; }
         private Verbosity FileVerbosity { get; set; }
         private string ApplicationName { get; set; }
-        private static ConsoleColor DefaultForeground => Console.ForegroundColor;
-        private static ConsoleColor DefaultBackground => Console.BackgroundColor;
+        private readonly ConsoleColor _defaultForeground;
+        private readonly ConsoleColor _defaultBackground;
         private Task ConsoleLoggingTask { get; }
         private Task FileLoggingTask { get; }
         private Task CleanupTask { get; }
@@ -211,10 +200,13 @@ namespace EzLogger
             ConsoleVerbosity = consoleVerbosity;
             FileVerbosity    = fileVerbosity;
 
+            _defaultForeground = Console.ForegroundColor;
+            _defaultBackground = Console.BackgroundColor;
+
             ApplicationName = AppDomain.CurrentDomain.FriendlyName;
-            ConsoleLoggingTask = Task.Run(() => Instance.ConsoleLoggerService(LoggingTaskCancellationTokenSource.Token));
-            FileLoggingTask = Task.Run(() => Instance.FileLoggerService(LoggingTaskCancellationTokenSource.Token));
-            CleanupTask = Task.Run(() => Instance.LoggerCleanerService(CleanupTaskCancellationTokenSource.Token));
+            ConsoleLoggingTask = Task.Run(() => ConsoleLoggerService(LoggingTaskCancellationTokenSource.Token));
+            FileLoggingTask = Task.Run(() => FileLoggerService(LoggingTaskCancellationTokenSource.Token));
+            CleanupTask = Task.Run(() => LoggerCleanerService(CleanupTaskCancellationTokenSource.Token));
         }
 
         /// <summary>
@@ -257,15 +249,15 @@ namespace EzLogger
         /// Prints a batch of logs on to the console.
         /// </summary>
         /// <param name="logBatch"></param>
-        private static void InternalLogConsole(List<Log> logBatch)
+        private void InternalLogConsole(List<Log> logBatch)
         {
             foreach (Log log in logBatch)
             {
-                if (log.Verbosity > Instance.ConsoleVerbosity)
+                if (log.Verbosity > ConsoleVerbosity)
                     continue;
 
-                string formattedLogstring = ComposeLogString(log.TimeStamp, log.Verbosity, log.Message);
-                Console.ResetColor();
+                StringBuilder sb = _sbCache.Value!;
+                ComposeLogString(sb, log.TimeStamp, log.Verbosity, log.Message);
 
                 Console.ForegroundColor = log.Verbosity switch
                 {
@@ -275,7 +267,7 @@ namespace EzLogger
                     Verbosity.Critical => ConsoleColor.White,
                     Verbosity.Announce => ConsoleColor.Black,
 
-                    _ => DefaultForeground,
+                    _ => _defaultForeground,
                 };
 
                 Console.BackgroundColor = log.Verbosity switch
@@ -283,13 +275,16 @@ namespace EzLogger
                     Verbosity.Critical => ConsoleColor.DarkRed,
                     Verbosity.Announce => ConsoleColor.DarkGreen,
 
-                    _ => DefaultBackground,
+                    _ => _defaultBackground,
                 };
 
                 Console.Write("\r");
-                Console.Write(formattedLogstring);
+                foreach (var chunk in sb.GetChunks())
+                {
+                    Console.Out.Write(chunk.Span);
+                }
                 Console.ResetColor();
-                Console.Write("\n");
+                Console.Out.WriteLine();
             }
         }
 
@@ -314,10 +309,15 @@ namespace EzLogger
 
                 using FileStream fileStream = new(filePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
                 using StreamWriter streamWriter = new(fileStream);
+                StringBuilder sb = _sbCache.Value!;
                 foreach (Log log in logBatch)
                 {
-                    string formattedLogString = ComposeLogString(log.TimeStamp, log.Verbosity, log.Message);
-                    await streamWriter.WriteLineAsync(formattedLogString);
+                    ComposeLogString(sb, log.TimeStamp, log.Verbosity, log.Message);
+                    foreach (var chunk in sb.GetChunks())
+                    {
+                        await streamWriter.WriteAsync(chunk);
+                    }
+                    await streamWriter.WriteLineAsync();
                 }
             }
             finally
@@ -506,11 +506,8 @@ namespace EzLogger
         /// 
         /// <param name="verbosity">verbosity level</param>
         /// <param name="message">log message</param>
-        /// 
-        /// <returns>timestamped string</returns>
-        private static string ComposeLogString(DateTime timeStamp, Verbosity verbosity, string message)
+        private static void ComposeLogString(StringBuilder sb, DateTime timeStamp, Verbosity verbosity, string message)
         {
-            StringBuilder sb = _sbCache.Value!;
             sb.Clear();
 
             sb.Append('[');
@@ -526,21 +523,19 @@ namespace EzLogger
             sb.Append(VerbosityStrings[(int)verbosity]);
             sb.Append(" -> ");
             sb.Append(message);
-
-            return sb.ToString();
         }
 
         private static void AppendTwoDigits(StringBuilder sb, int value)
         {
-            if (value < 10) sb.Append('0');
-            sb.Append(value);
+            sb.Append((char)('0' + (value / 10)));
+            sb.Append((char)('0' + (value % 10)));
         }
 
         private static void AppendThreeDigits(StringBuilder sb, int value)
         {
-            if (value < 100) sb.Append('0');
-            if (value < 10) sb.Append('0');
-            sb.Append(value);
+            sb.Append((char)('0' + (value / 100)));
+            sb.Append((char)('0' + ((value / 10) % 10)));
+            sb.Append((char)('0' + (value % 10)));
         }
 
         /// <summary>
